@@ -30,7 +30,7 @@ use {
     },
 };
 
-/// A fixed-capacity [`Vec`] which allows concurrences reads and
+/// A fixed-capacity [`Vec`] which allows concurrent reads and
 /// spin-lock writes.
 pub struct AtomicVec<T, A: Allocator = Global> {
     buf: RawAtomicVec<T, A>,
