@@ -83,8 +83,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the given allocator `alloc`.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * capacity needs to fit the layout size that the pointer was allocated
@@ -92,7 +91,11 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     /// * the allocated size in bytes cannot exceed [`isize::MAX`]
     #[inline]
     #[must_use]
-    pub(crate) unsafe fn from_nonnull_in(ptr: NonNull<T>, cap: Cap, alloc: A) -> Self {
+    pub(crate) unsafe fn from_nonnull_in(
+        ptr: NonNull<T>,
+        cap: Cap,
+        alloc: A,
+    ) -> Self {
         Self {
             ptr: ptr.cast(),
             cap,
@@ -105,8 +108,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the given allocator `alloc`.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * capacity needs to fit the layout size that the pointer was allocated
@@ -147,7 +149,8 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
 
 impl<T, A: Allocator> Drop for RawAtomicVec<T, A> {
     fn drop(&mut self) {
-        // if T::IS_ZST then cap is zero. if the allocated size is 0, then cap is zero.
+        // if T::IS_ZST then cap is zero. if the allocated size is 0, then cap
+        // is zero.
         if self.cap == Cap::ZERO {
             return;
         }

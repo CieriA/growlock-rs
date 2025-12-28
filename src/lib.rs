@@ -14,8 +14,6 @@ mod raw;
 #[cfg(test)]
 mod tests;
 
-use std::mem::ManuallyDrop;
-use std::ptr;
 use {
     crate::{
         cap::Cap, error::TryReserveError, guard::AtomicVecGuard,
@@ -23,8 +21,9 @@ use {
     },
     std::{
         alloc::{Allocator, Global},
+        mem::ManuallyDrop,
         ops,
-        ptr::NonNull,
+        ptr::{self, NonNull},
         slice::{self, SliceIndex},
         sync::{
             Mutex,
@@ -169,8 +168,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the given allocator `alloc`.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * `capacity` needs to fit the layout size that the pointer was allocated
@@ -180,14 +178,19 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
     #[inline]
-    pub unsafe fn from_parts_in(ptr: NonNull<T>, len: AtomicUsize, capacity: usize, alloc: A) -> Self {
+    pub unsafe fn from_parts_in(
+        ptr: NonNull<T>,
+        len: AtomicUsize,
+        capacity: usize,
+        alloc: A,
+    ) -> Self {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
                 RawAtomicVec::from_nonnull_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
-                    alloc
+                    alloc,
                 )
             },
             len,
@@ -199,8 +202,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the given allocator `alloc`.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * `capacity` needs to fit the layout size that the pointer was allocated
@@ -210,14 +212,19 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
     #[inline]
-    pub unsafe fn from_raw_parts_in(ptr: *mut T, len: AtomicUsize, capacity: usize, alloc: A) -> Self {
+    pub unsafe fn from_raw_parts_in(
+        ptr: *mut T,
+        len: AtomicUsize,
+        capacity: usize,
+        alloc: A,
+    ) -> Self {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
                 RawAtomicVec::from_raw_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
-                    alloc
+                    alloc,
                 )
             },
             len,
@@ -259,7 +266,8 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         let ptr = this.as_mut_ptr();
         let len = this.len();
         let cap = this.capacity();
-        // SAFETY: IDK but the stdlib does this too in `Vec::into_raw_parts_with_alloc`
+        // SAFETY: IDK but the stdlib does this too in
+        // `Vec::into_raw_parts_with_alloc`
         let alloc = unsafe { ptr::read(this.allocator()) };
         (ptr, len, cap, alloc)
     }
@@ -303,8 +311,7 @@ impl<T> AtomicVec<T> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the global allocator.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * `capacity` needs to fit the layout size that the pointer was allocated
@@ -314,7 +321,11 @@ impl<T> AtomicVec<T> {
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
     #[inline]
-    pub unsafe fn from_parts(ptr: NonNull<T>, len: AtomicUsize, capacity: usize) -> Self {
+    pub unsafe fn from_parts(
+        ptr: NonNull<T>,
+        len: AtomicUsize,
+        capacity: usize,
+    ) -> Self {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
@@ -333,8 +344,7 @@ impl<T> AtomicVec<T> {
     ///
     /// # Safety
     /// * `ptr` must be currently allocated with the global allocator.
-    /// * `T` needs to have the same alignment as what `ptr` was allocated
-    ///   with.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated with.
     /// * `size_of::<T>() * cap` must be the same as the size the pointer was
     ///   allocated with.
     /// * `capacity` needs to fit the layout size that the pointer was allocated
@@ -344,7 +354,11 @@ impl<T> AtomicVec<T> {
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
     #[inline]
-    pub unsafe fn from_raw_parts(ptr: *mut T, len: AtomicUsize, capacity: usize) -> Self {
+    pub unsafe fn from_raw_parts(
+        ptr: *mut T,
+        len: AtomicUsize,
+        capacity: usize,
+    ) -> Self {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
