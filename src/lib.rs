@@ -15,6 +15,10 @@ mod raw;
 #[cfg(test)]
 mod tests;
 
+// TODO: AtomicVec::extend, AtomicVec::into_iter
+
+use std::borrow::Borrow;
+use std::hash::{Hash, Hasher};
 use {
     crate::{
         cap::Cap, error::TryReserveError, guard::AtomicVecGuard,
@@ -22,6 +26,7 @@ use {
     },
     std::{
         alloc::{Allocator, Global},
+        fmt,
         mem::ManuallyDrop,
         ops,
         ptr::{self, NonNull},
@@ -129,16 +134,16 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// use atomicvec::AtomicVec;
     /// use std::alloc::System;
     ///
-    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::try_new_in(10, System).unwrap();
+    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::try_with_capacity_in(10, System).unwrap();
     /// ```
-    pub fn try_new_in(
+    pub fn try_with_capacity_in(
         capacity: usize,
         alloc: A,
     ) -> Result<Self, TryReserveError> {
         let Some(cap) = Cap::try_new::<T>(capacity) else {
             return Err(TryReserveError::CapacityOverflow);
         };
-        let buf = RawAtomicVec::try_new_in(cap, alloc)?;
+        let buf = RawAtomicVec::try_with_capacity_in(cap, alloc)?;
 
         Ok(Self {
             buf,
@@ -155,15 +160,15 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// use atomicvec::AtomicVec;
     /// use std::alloc::System;
     ///
-    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::new_in(10, System);
+    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::with_capacity_in(10, System);
     /// ```
     #[inline]
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn new_in(capacity: usize, alloc: A) -> Self {
+    pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
         let cap = Cap::try_new::<T>(capacity)
             .unwrap_or_else(|| panic!("{}", TryReserveError::CapacityOverflow));
-        let buf = RawAtomicVec::new_in(cap, alloc);
+        let buf = RawAtomicVec::with_capacity_in(cap, alloc);
 
         Self {
             buf,
@@ -257,11 +262,14 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// After calling this function, the caller is responsible for cleaning up
     /// the [`AtomicVec<T>`]. Most often, you can do this by calling
     /// [`from_parts_in`](AtomicVec::from_parts_in).
-    #[inline]
     pub fn into_parts_with_alloc(self) -> (NonNull<T>, usize, usize, A) {
-        let (ptr, len, cap, alloc) = self.into_raw_parts_with_alloc();
-        // SAFETY: the ptr of the `AtomicVec` is always non-null.
-        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        let mut this = ManuallyDrop::new(self);
+        let ptr = this.as_non_null();
+        let len = this.len();
+        let cap = this.capacity();
+        // SAFETY: `this.allocator()` is a reference
+        // so all precondition are satisfied.
+        let alloc = unsafe { ptr::read(this.allocator()) };
         (ptr, len, cap, alloc)
     }
     /// Decomposes a [`AtomicVec<T>`] into its raw components:
@@ -270,14 +278,10 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// After calling this function, the caller is responsible for cleaning up
     /// the [`AtomicVec<T>`]. Most often, you can do this by calling
     /// [`from_raw_parts_in`](AtomicVec::from_raw_parts_in).
+    #[inline]
     pub fn into_raw_parts_with_alloc(self) -> (*mut T, usize, usize, A) {
-        let mut this = ManuallyDrop::new(self);
-        let ptr = this.as_mut_ptr();
-        let len = this.len();
-        let cap = this.capacity();
-        // SAFETY: IDK but the stdlib does this too in
-        // `Vec::into_raw_parts_with_alloc`
-        let alloc = unsafe { ptr::read(this.allocator()) };
+        let (ptr, len, cap, alloc) = self.into_parts_with_alloc();
+        let ptr = ptr.as_ptr();
         (ptr, len, cap, alloc)
     }
 }
@@ -295,11 +299,11 @@ impl<T> AtomicVec<T> {
     /// ```
     /// use atomicvec::AtomicVec;
     ///
-    /// let my_atomic_vec: AtomicVec<()> = AtomicVec::try_new(10).unwrap();
+    /// let my_atomic_vec: AtomicVec<()> = AtomicVec::try_with_capacity(10).unwrap();
     /// ```
     #[inline]
-    pub fn try_new(capacity: usize) -> Result<Self, TryReserveError> {
-        Self::try_new_in(capacity, Global)
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
+        Self::try_with_capacity_in(capacity, Global)
     }
 
     /// Constructs a new [`AtomicVec<T>`].
@@ -308,13 +312,14 @@ impl<T> AtomicVec<T> {
     /// ```
     /// use atomicvec::AtomicVec;
     ///
-    /// let my_atomic_vec: AtomicVec<String> = AtomicVec::new(10);
+    /// let my_atomic_vec: AtomicVec<String> = AtomicVec::with_capacity(10);
     /// ```
     #[inline]
     #[must_use]
-    pub fn new(capacity: usize) -> Self {
-        Self::new_in(capacity, Global)
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_in(capacity, Global)
     }
+
     /// Constructs a new [`AtomicVec<T>`] directly from a [`NonNull`] pointer,
     /// and a capacity.
     ///
@@ -428,6 +433,18 @@ impl<T, A: Allocator> ops::Deref for AtomicVec<T, A> {
         self.as_slice()
     }
 }
+impl<T, A: Allocator> Borrow<[T]> for AtomicVec<T, A> {
+    #[inline]
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+impl<T, A: Allocator> AsRef<[T]> for AtomicVec<T, A> {
+    #[inline]
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
 
 impl<T, I, A> ops::Index<I> for AtomicVec<T, A>
 where
@@ -440,6 +457,24 @@ where
         ops::Index::index(&**self, index)
     }
 }
+impl<T, A: Allocator + Default> Default for AtomicVec<T, A> {
+    #[inline]
+    fn default() -> Self {
+        Self::with_capacity_in(0, A::default())
+    }
+}
+
+// ------------------------------- fmt impl -------------------------------
+
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for AtomicVec<T, A> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+// ----------------------------- From impl -----------------------------
+
 impl<T, A: Allocator> From<Vec<T, A>> for AtomicVec<T, A> {
     #[inline]
     fn from(value: Vec<T, A>) -> Self {
@@ -447,5 +482,117 @@ impl<T, A: Allocator> From<Vec<T, A>> for AtomicVec<T, A> {
         // SAFETY: the `AtomicVec` is constructed from parts of the given `Vec`
         // so this is safe.
         unsafe { Self::from_parts_in(ptr, AtomicUsize::new(len), cap, alloc) }
+    }
+}
+
+// ----------------------------- PartialEq impl -----------------------------
+
+impl<T, U, A, A2> PartialEq<AtomicVec<U, A2>> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+    A2: Allocator,
+{
+    #[inline]
+    fn eq(&self, rhs: &AtomicVec<U, A2>) -> bool {
+        PartialEq::eq(&**self, &**rhs)
+    }
+}
+impl<T, U, A> PartialEq<[U]> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    #[inline]
+    fn eq(&self, rhs: &[U]) -> bool {
+        PartialEq::eq(&**self, rhs)
+    }
+}
+impl<T, U, A> PartialEq<AtomicVec<U, A>> for [T]
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+        PartialEq::eq(self, &**rhs)
+    }
+}
+impl<T, U, A> PartialEq<&[U]> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    #[inline]
+    fn eq(&self, rhs: &&[U]) -> bool {
+        PartialEq::eq(&**self, *rhs)
+    }
+}
+impl<T, U, A> PartialEq<AtomicVec<U, A>> for &[T]
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+        PartialEq::eq(*self, &**rhs)
+    }
+}
+impl<T, U, A> PartialEq<&mut [U]> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    #[inline]
+    fn eq(&self, rhs: &&mut [U]) -> bool {
+        PartialEq::eq(&**self, *rhs)
+    }
+}impl<T, U, A> PartialEq<AtomicVec<U, A>> for &mut [T]
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+        PartialEq::eq(*self, &**rhs)
+    }
+}
+impl<T, U, A, const N: usize> PartialEq<[U; N]> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    #[inline]
+    fn eq(&self, rhs: &[U; N]) -> bool {
+        PartialEq::eq(&**self, rhs)
+    }
+}impl<T, U, A, const N: usize> PartialEq<AtomicVec<U, A>> for [T; N]
+where
+    T: PartialEq<U>,
+    A: Allocator,
+{
+    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+        PartialEq::eq(self, &**rhs)
+    }
+}
+impl<T, U, A, A2> PartialEq<Vec<U, A2>> for AtomicVec<T, A>
+where
+    T: PartialEq<U>,
+    A: Allocator,
+    A2: Allocator,
+{
+    fn eq(&self, rhs: &Vec<U, A2>) -> bool {
+        PartialEq::eq(&**self, &**rhs)
+    }
+}
+
+// ----------------------------- Eq and Hash impl -----------------------------
+
+impl<T: Eq, A: Allocator> Eq for AtomicVec<T, A> {}
+/// [`AtomicVec`] implements [`Borrow<[T]>`], so we need to `hash` the
+/// same way as the slice does.
+impl<T: Hash, A: Allocator> Hash for AtomicVec<T, A> {
+    /// [`AtomicVec`] implements [`Borrow<[T]>`], so we need to `hash` the
+    /// same way as the slice does.
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Hash::hash(&**self, state);
     }
 }

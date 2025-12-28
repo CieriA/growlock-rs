@@ -32,7 +32,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     /// Returns an error if:
     /// * `cap * size_of::<T>` overflows `isize::MAX`
     /// * memory is exhausted
-    pub(crate) fn try_new_in(
+    pub(crate) fn try_with_capacity_in(
         cap: Cap,
         alloc: A,
     ) -> Result<Self, TryReserveError> {
@@ -64,8 +64,8 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     }
     /// Constructs a new [`RawAtomicVec<T>`] in the provided allocator.
     #[inline]
-    pub(crate) fn new_in(cap: Cap, alloc: A) -> Self {
-        match Self::try_new_in(cap, alloc) {
+    pub(crate) fn with_capacity_in(cap: Cap, alloc: A) -> Self {
+        match Self::try_with_capacity_in(cap, alloc) {
             Ok(this) => this,
             Err(e @ TryReserveError::CapacityOverflow) => panic!("{e}"),
             Err(TryReserveError::AllocError(layout)) => {
