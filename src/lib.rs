@@ -174,6 +174,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// * `capacity` needs to fit the layout size that the pointer was allocated
     ///   with.
     /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    ///   (the size is `self.capacity() * size_of::<T>`)
     /// * `len` must be <= `capacity`
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
@@ -185,7 +186,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         alloc: A,
     ) -> Self {
         Self {
-            // SAFETY: the  safety contract must be upheld by the caller
+            // SAFETY: the safety contract must be upheld by the caller
             buf: unsafe {
                 RawAtomicVec::from_nonnull_in(
                     ptr,
@@ -441,5 +442,15 @@ where
     #[inline]
     fn index(&self, index: I) -> &Self::Output {
         ops::Index::index(&**self, index)
+    }
+}
+impl<T, A: Allocator> From<Vec<T,A>> for AtomicVec<T, A> {
+    fn from(value: Vec<T, A>) -> Self {
+        // SAFETY: the `AtomicVec` is constructed from parts of the given `Vec`
+        // so this is safe.
+        unsafe {
+            let (ptr, len, cap, alloc) = value.into_parts_with_alloc();
+            Self::from_parts_in(ptr, AtomicUsize::new(len), cap, alloc)
+        }
     }
 }
