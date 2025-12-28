@@ -78,6 +78,51 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
             }
         }
     }
+    /// Constructs a new [`RawAtomicVec<T>`] directly from a
+    /// [`NonNull`] pointer, a capacity, and an allocator.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the given allocator `alloc`.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * capacity needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    #[inline]
+    #[must_use]
+    pub(crate) unsafe fn from_nonnull_in(ptr: NonNull<T>, cap: Cap, alloc: A) -> Self {
+        Self {
+            ptr: ptr.cast(),
+            cap,
+            alloc,
+            _marker: PhantomData,
+        }
+    }
+    /// Constructs a new [`RawAtomicVec<T>`] directly from a pointer,
+    /// a capacity, and an allocator.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the given allocator `alloc`.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * capacity needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    #[inline]
+    #[must_use]
+    pub(crate) unsafe fn from_raw_in(ptr: *mut T, cap: Cap, alloc: A) -> Self {
+        Self {
+            // SAFETY: the safety contract must be upheld by the caller.
+            ptr: unsafe { NonNull::new_unchecked(ptr).cast() },
+            cap,
+            alloc,
+            _marker: PhantomData,
+        }
+    }
     #[inline]
     pub(crate) const fn non_null(&self) -> NonNull<T> {
         self.ptr.cast()

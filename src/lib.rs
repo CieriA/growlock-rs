@@ -14,6 +14,8 @@ mod raw;
 #[cfg(test)]
 mod tests;
 
+use std::mem::ManuallyDrop;
+use std::ptr;
 use {
     crate::{
         cap::Cap, error::TryReserveError, guard::AtomicVecGuard,
@@ -82,9 +84,10 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     }
     #[inline]
     #[must_use]
-    pub const fn as_mut_ptr(&self) -> *mut T {
+    pub const fn as_mut_ptr(&mut self) -> *mut T {
         self.buf.ptr()
     }
+    // FIXME should this be &mut self? if yes, what do we do in guard.rs?
     #[inline]
     #[must_use]
     pub const fn as_non_null(&self) -> NonNull<T> {
@@ -161,6 +164,66 @@ impl<T, A: Allocator> AtomicVec<T, A> {
             mutex: Mutex::new(()),
         }
     }
+    /// Constructs a new [`AtomicVec<T>`] directly from a [`NonNull`] pointer,
+    /// a capacity, and an allocator.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the given allocator `alloc`.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * `capacity` needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    /// * `len` must be <= `capacity`
+    /// * at least `len` elements starting from `ptr` need to be properly
+    ///   initialized values of type `T`.
+    #[inline]
+    pub fn from_parts_in(ptr: NonNull<T>, len: AtomicUsize, capacity: usize, alloc: A) -> Self {
+        Self {
+            // SAFETY: the  safety contract must be upheld by the caller
+            buf: unsafe {
+                RawAtomicVec::from_nonnull_in(
+                    ptr,
+                    Cap::new_unchecked::<T>(capacity),
+                    alloc
+                )
+            },
+            len,
+            mutex: Mutex::new(()),
+        }
+    }
+    /// Constructs a new [`AtomicVec<T>`] directly from a pointer,
+    /// a capacity, and an allocator.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the given allocator `alloc`.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * `capacity` needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    /// * `len` must be <= `capacity`
+    /// * at least `len` elements starting from `ptr` need to be properly
+    ///   initialized values of type `T`.
+    #[inline]
+    pub fn from_raw_parts_in(ptr: *mut T, len: AtomicUsize, capacity: usize, alloc: A) -> Self {
+        Self {
+            // SAFETY: the  safety contract must be upheld by the caller
+            buf: unsafe {
+                RawAtomicVec::from_raw_in(
+                    ptr,
+                    Cap::new_unchecked::<T>(capacity),
+                    alloc
+                )
+            },
+            len,
+            mutex: Mutex::new(()),
+        }
+    }
 
     // TODO: create an error for this (now it is an option)
     #[inline]
@@ -171,6 +234,34 @@ impl<T, A: Allocator> AtomicVec<T, A> {
             _guard: guard,
             vec: self,
         })
+    }
+    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// ([`NonNull`] pointer, length, capacity, allocator).
+    ///
+    /// After calling this function, the caller is responsible for cleaning up
+    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
+    /// [`from_parts_in`](AtomicVec::from_parts_in).
+    #[inline]
+    pub fn into_parts_with_alloc(self) -> (NonNull<T>, usize, usize, A) {
+        let (ptr, len, cap, alloc) = self.into_raw_parts_with_alloc();
+        // SAFETY: the ptr of the `AtomicVec` is always non-null.
+        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        (ptr, len, cap, alloc)
+    }
+    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// (pointer, length, capacity, allocator).
+    ///
+    /// After calling this function, the caller is responsible for cleaning up
+    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
+    /// [`from_raw_parts_in`](AtomicVec::from_raw_parts_in).
+    pub fn into_raw_parts_with_alloc(self) -> (*mut T, usize, usize, A) {
+        let mut this = ManuallyDrop::new(self);
+        let ptr = this.as_mut_ptr();
+        let len = this.len();
+        let cap = this.capacity();
+        // SAFETY: IDK but the stdlib does this too in `Vec::into_raw_parts_with_alloc`
+        let alloc = unsafe { ptr::read(this.allocator()) };
+        (ptr, len, cap, alloc)
     }
 }
 
@@ -207,6 +298,66 @@ impl<T> AtomicVec<T> {
     pub fn new(capacity: usize) -> Self {
         Self::new_in(capacity, Global)
     }
+    /// Constructs a new [`AtomicVec<T>`] directly from a [`NonNull`] pointer,
+    /// and a capacity.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the global allocator.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * `capacity` needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    /// * `len` must be <= `capacity`
+    /// * at least `len` elements starting from `ptr` need to be properly
+    ///   initialized values of type `T`.
+    #[inline]
+    pub fn from_parts(ptr: NonNull<T>, len: AtomicUsize, capacity: usize) -> Self {
+        Self {
+            // SAFETY: the  safety contract must be upheld by the caller
+            buf: unsafe {
+                RawAtomicVec::from_nonnull_in(
+                    ptr,
+                    Cap::new_unchecked::<T>(capacity),
+                    Global,
+                )
+            },
+            len,
+            mutex: Mutex::new(()),
+        }
+    }
+    /// Constructs a new [`AtomicVec<T>`] directly from a pointer, and
+    /// a capacity.
+    ///
+    /// # Safety
+    /// * `ptr` must be currently allocated with the global allocator.
+    /// * `T` needs to have the same alignment as what `ptr` was allocated
+    ///   with.
+    /// * `size_of::<T>() * cap` must be the same as the size the pointer was
+    ///   allocated with.
+    /// * `capacity` needs to fit the layout size that the pointer was allocated
+    ///   with.
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
+    /// * `len` must be <= `capacity`
+    /// * at least `len` elements starting from `ptr` need to be properly
+    ///   initialized values of type `T`.
+    #[inline]
+    pub fn from_raw_parts(ptr: *mut T, len: AtomicUsize, capacity: usize) -> Self {
+        Self {
+            // SAFETY: the  safety contract must be upheld by the caller
+            buf: unsafe {
+                RawAtomicVec::from_raw_in(
+                    ptr,
+                    Cap::new_unchecked::<T>(capacity),
+                    Global,
+                )
+            },
+            len,
+            mutex: Mutex::new(()),
+        }
+    }
 
     #[must_use]
     pub fn from_elem(capacity: usize, elem: T) -> Self
@@ -233,6 +384,28 @@ impl<T> AtomicVec<T> {
         }
         drop(guard);
         this
+    }
+    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// ([`NonNull`] pointer, length, capacity).
+    ///
+    /// After calling this function, the caller is responsible for cleaning up
+    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
+    /// [`from_parts`](AtomicVec::from_parts).
+    #[inline]
+    pub fn into_parts(self) -> (NonNull<T>, usize, usize) {
+        let this = ManuallyDrop::new(self);
+        (this.as_non_null(), this.len(), this.capacity())
+    }
+    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// (pointer, length, capacity).
+    ///
+    /// After calling this function, the caller is responsible for cleaning up
+    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
+    /// [`from_raw_parts`](AtomicVec::from_raw_parts).
+    #[inline]
+    pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
+        let mut this = ManuallyDrop::new(self);
+        (this.as_mut_ptr(), this.len(), this.capacity())
     }
 }
 /// FIXME: I don't know if this is sound

@@ -45,7 +45,7 @@ impl<T, A: Allocator> AtomicVecGuard<'_, T, A> {
 
         // SAFETY: the ptr is still in the allocated block, even after add(len)
         unsafe {
-            let dst = self.vec.as_mut_ptr().add(len);
+            let dst = self.vec.as_non_null().add(len);
             dst.write(value);
             self.vec.len.store(len + 1, Ordering::Release);
         }
