@@ -53,11 +53,6 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
         let Ok(block) = alloc.allocate(layout) else {
             return Err(TryReserveError::AllocError(layout));
         };
-
-        let cap = block.len() / size_of::<T>();
-        // SAFETY: `cap` is derived from a valid allocation,
-        //          so it can't exceed an isize.
-        let cap = unsafe { Cap::new_unchecked::<T>(cap) };
         let ptr = block.cast::<u8>();
 
         Ok(Self {
@@ -131,7 +126,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
         self.ptr.cast()
     }
     #[inline]
-    pub(crate) const fn as_mut_ptr(&mut self) -> *mut T {
+    pub(crate) const fn as_mut_ptr(&self) -> *mut T {
         self.as_non_null().as_ptr()
     }
     #[inline]
@@ -150,25 +145,34 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     pub(crate) const fn allocator(&self) -> &A {
         &self.alloc
     }
+
+    fn memory_layout(&self) -> Option<(NonNull<u8>, Layout)> {
+        if self.cap == Cap::ZERO {
+            None
+        } else {
+            // SAFETY:
+            // * we allocated this chunk of memory so `unchecked_mul` and `size`
+            //   rounded to the nearest power of two both cannot overflow
+            //   `isize::MAX`.
+            // * `align` is obtained through align_of so it is a power of two.
+            unsafe {
+                let size = size_of::<T>().unchecked_mul(self.cap.get());
+                let layout =
+                    Layout::from_size_align_unchecked(size, align_of::<T>());
+                Some((self.ptr, layout))
+            }
+        }
+    }
 }
 
 impl<T, A: Allocator> Drop for RawAtomicVec<T, A> {
     fn drop(&mut self) {
-        // if T::IS_ZST then cap is zero. if the allocated size is 0, then cap
-        // is zero.
-        if self.cap == Cap::ZERO {
-            return;
-        }
-
-        let size = size_of::<T>() * self.cap.get();
-        let align = align_of::<T>();
-        // SAFETY:
-        // * `!T::IS_ZST`
-        // * `size <= isize::MAX` is already checked in the constructor
-        // * the constructed layout is the same as in the constructor
-        unsafe {
-            let layout = Layout::from_size_align_unchecked(size, align);
-            self.alloc.deallocate(self.ptr, layout);
+        if let Some((ptr, layout)) = self.memory_layout() {
+            // SAFETY: we allocated this block of memory with this ptr and
+            // this layout
+            unsafe {
+                self.alloc.deallocate(ptr, layout);
+            }
         }
     }
 }

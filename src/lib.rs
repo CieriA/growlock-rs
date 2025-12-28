@@ -10,6 +10,7 @@
 mod cap;
 pub mod error;
 pub mod guard;
+mod macros;
 mod raw;
 #[cfg(test)]
 mod tests;
@@ -86,10 +87,17 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     pub const fn as_mut_ptr(&mut self) -> *mut T {
         self.buf.as_mut_ptr()
     }
-    // FIXME should this be &mut self? if yes, what do we do in guard.rs?
     #[inline]
     #[must_use]
-    pub const fn as_non_null(&self) -> NonNull<T> {
+    pub const fn as_non_null(&mut self) -> NonNull<T> {
+        self.buf.as_non_null()
+    }
+    /// SAFETY:
+    /// calling this method is safe, but using the ptr is not. It's okay
+    /// because this is private and only used in the guard.
+    #[inline]
+    #[must_use]
+    pub(crate) const unsafe fn as_non_null_ref(&self) -> NonNull<T> {
         self.buf.as_non_null()
     }
     #[inline]
@@ -173,8 +181,8 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     ///   allocated with.
     /// * `capacity` needs to fit the layout size that the pointer was allocated
     ///   with.
-    /// * the allocated size in bytes cannot exceed [`isize::MAX`]
-    ///   (the size is `self.capacity() * size_of::<T>`)
+    /// * the allocated size in bytes cannot exceed [`isize::MAX`] (the size is
+    ///   `self.capacity() * size_of::<T>`)
     /// * `len` must be <= `capacity`
     /// * at least `len` elements starting from `ptr` need to be properly
     ///   initialized values of type `T`.
@@ -423,6 +431,18 @@ impl<T> AtomicVec<T> {
         (this.as_mut_ptr(), this.len(), this.capacity())
     }
 }
+impl<T, A: Allocator> Drop for AtomicVec<T, A> {
+    fn drop(&mut self) {
+        // SAFETY: all elements are correctly aligned.
+        //  see AtomicVec::as_slice for safety.
+        unsafe {
+            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
+                self.as_mut_ptr(),
+                self.len(),
+            ));
+        }
+    }
+}
 /// FIXME: I don't know if this is sound
 impl<T, A: Allocator> ops::Deref for AtomicVec<T, A> {
     type Target = [T];
@@ -445,14 +465,12 @@ where
     }
 }
 // FIXME Is this sound? I think it is
-impl<T, A: Allocator> From<Vec<T,A>> for AtomicVec<T, A> {
+impl<T, A: Allocator> From<Vec<T, A>> for AtomicVec<T, A> {
     #[inline]
     fn from(value: Vec<T, A>) -> Self {
         let (ptr, len, cap, alloc) = value.into_parts_with_alloc();
         // SAFETY: the `AtomicVec` is constructed from parts of the given `Vec`
         // so this is safe.
-        unsafe {
-            Self::from_parts_in(ptr, AtomicUsize::new(len), cap, alloc)
-        }
+        unsafe { Self::from_parts_in(ptr, AtomicUsize::new(len), cap, alloc) }
     }
 }
