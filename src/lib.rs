@@ -17,8 +17,6 @@ mod tests;
 
 // TODO: AtomicVec::extend, AtomicVec::into_iter
 
-use std::borrow::Borrow;
-use std::hash::{Hash, Hasher};
 use {
     crate::{
         cap::Cap, error::TryReserveError, guard::AtomicVecGuard,
@@ -26,7 +24,9 @@ use {
     },
     std::{
         alloc::{Allocator, Global},
+        borrow::Borrow,
         fmt,
+        hash::{Hash, Hasher},
         mem::ManuallyDrop,
         ops,
         ptr::{self, NonNull},
@@ -545,7 +545,8 @@ where
     fn eq(&self, rhs: &&mut [U]) -> bool {
         PartialEq::eq(&**self, *rhs)
     }
-}impl<T, U, A> PartialEq<AtomicVec<U, A>> for &mut [T]
+}
+impl<T, U, A> PartialEq<AtomicVec<U, A>> for &mut [T]
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -563,7 +564,8 @@ where
     fn eq(&self, rhs: &[U; N]) -> bool {
         PartialEq::eq(&**self, rhs)
     }
-}impl<T, U, A, const N: usize> PartialEq<AtomicVec<U, A>> for [T; N]
+}
+impl<T, U, A, const N: usize> PartialEq<AtomicVec<U, A>> for [T; N]
 where
     T: PartialEq<U>,
     A: Allocator,

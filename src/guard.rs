@@ -1,5 +1,5 @@
 use {
-    crate::AtomicVec,
+    crate::{AtomicVec, error::VecFull},
     std::{
         alloc::{Allocator, Global},
         ops,
@@ -40,5 +40,25 @@ impl<T, A: Allocator> AtomicVecGuard<'_, T, A> {
             dst.write(value);
             self.vec.len.store(len + 1, Ordering::Release);
         }
+    }
+    /// # Errors
+    /// Returns an error if the [`AtomicVec`] is full, i.e. `len == capacity`
+    pub fn try_push(&mut self, value: T) -> Result<(), VecFull> {
+        // We locked the mutex so writes cannot happen.
+        let len = self.vec.len.load(Ordering::Relaxed);
+        let cap = self.vec.capacity();
+
+        if len >= cap {
+            return Err(VecFull);
+        }
+
+        // SAFETY: the ptr is still in the allocated block, even after add(len)
+        unsafe {
+            let dst = self.vec.as_non_null_ref().add(len);
+            dst.write(value);
+        }
+        self.vec.len.store(len + 1, Ordering::Release);
+
+        Ok(())
     }
 }

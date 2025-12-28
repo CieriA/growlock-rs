@@ -1,10 +1,22 @@
-use {
-    crate::{AtomicVec, cap::Cap},
-    std::alloc::System,
-};
 // > NOTE: using wildcard allows `miri` to tell the exact line
 // > that causes UB. This is because the [`AtomicVec`] is
 // > instantly dropped.
+
+use {
+    crate::{AtomicVec, cap::Cap},
+    std::{
+        alloc::System,
+        sync::atomic::{AtomicUsize, Ordering},
+    },
+};
+
+/// Helper struct
+struct AddOnDrop<'a>(&'a AtomicUsize);
+impl Drop for AddOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 // ------------------- constructors -------------------
 
@@ -46,6 +58,13 @@ fn new_empty_drop_zst() {
     assert_eq!(v.buf.raw_cap(), Cap::ZERO);
 }
 
+#[test]
+fn from_vec() {
+    let vec = vec![1u32, 2, 3, 4, 5];
+    let atomic_vec = AtomicVec::from(vec);
+    assert_eq!(&atomic_vec[..], &[1, 2, 3, 4, 5]);
+}
+
 // ------------------- push panics -------------------
 #[test]
 #[should_panic(expected = "length overflow")]
@@ -56,19 +75,19 @@ fn push_overflow() {
         guard.push(i);
     }
 }
+#[test]
+fn try_push_overflow() {
+    let vec = AtomicVec::with_capacity(5);
+    let mut guard = vec.lock().unwrap();
+    for i in 0..5 {
+        assert!(guard.try_push(i).is_ok());
+    }
+    assert!(guard.try_push(6).is_err());
+}
 
 #[test]
 fn init_drop_on_panic() {
-    use std::{
-        panic,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
-    struct AddOnDrop<'a>(&'a AtomicUsize);
-    impl Drop for AddOnDrop<'_> {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    use std::panic;
 
     let counter = AtomicUsize::new(0);
     let result = panic::catch_unwind(|| {
@@ -89,20 +108,12 @@ fn init_drop_on_panic() {
 
 #[test]
 fn initialized_drop() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    struct AddOnDrop<'a>(&'a AtomicUsize);
-    impl Drop for AddOnDrop<'_> {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
     let counter = AtomicUsize::new(0);
     {
         let vec = AtomicVec::with_capacity(200);
         let mut guard = vec.lock().unwrap();
         for _ in 0..100 {
-            guard.push(AddOnDrop);
+            guard.push(AddOnDrop(&counter));
         }
         // here `vec` is dropped
     }

@@ -142,6 +142,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
         }
     }
     #[inline]
+    #[cfg(test)]
     pub(crate) const fn raw_cap(&self) -> Cap {
         self.cap
     }

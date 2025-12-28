@@ -13,3 +13,7 @@ impl From<Layout> for TryReserveError {
         Self::AllocError(e)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Error)]
+#[error("tried to push to a full `AtomicVec`")]
+pub struct VecFull;
