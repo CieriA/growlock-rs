@@ -11,6 +11,7 @@ pub struct AtomicVecGuard<'a, T, A: Allocator = Global> {
     pub(crate) _guard: MutexGuard<'a, ()>,
     pub(crate) vec: &'a AtomicVec<T, A>,
 }
+// FIXME Does this make sense?
 impl<T, A: Allocator> ops::Deref for AtomicVecGuard<'_, T, A> {
     type Target = [T];
     #[inline]
@@ -35,7 +36,7 @@ impl<T, A: Allocator> AtomicVecGuard<'_, T, A> {
         unsafe { slice::from_raw_parts(self.vec.as_ptr(), self.vec.len()) }
     }
     /// # Panics
-    /// if the vec is full.
+    /// if the vec is full (i.e. capacity == len).
     pub fn push(&self, value: T) {
         // We locked the mutex so writes cannot happen.
         let len = self.vec.len.load(Ordering::Relaxed);

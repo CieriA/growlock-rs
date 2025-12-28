@@ -3,7 +3,7 @@
 //!
 //! [`AtomicVec`] is designed for situations where reads need to
 //! be extremely fast and cannot be blocked by writes. The
-//! capacity is fixed and defined on creation, and cannot be
+//! capacity is fixed, defined on creation, and cannot be
 //! greater than [`isize::MAX`].
 #![feature(allocator_api, sized_type_properties)]
 
