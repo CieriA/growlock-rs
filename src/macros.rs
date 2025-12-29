@@ -1,16 +1,16 @@
 #[macro_export]
-macro_rules! atomic_vec {
+macro_rules! grow_lock {
     () => {
-        $crate::AtomicVec::empty()
+        $crate::GrowLock::with_capacity(0)
     };
     ($capacity:expr) => {
-        $crate::AtomicVec::with_capacity($capacity)
+        $crate::GrowLock::with_capacity($capacity)
     };
 
     ($capacity:expr, [$($elem:expr),*$(,)?]) => {{
-        let __v__ = $crate::AtomicVec::with_capacity($capacity);
+        let __v__ = $crate::GrowLock::with_capacity($capacity);
         {
-            let mut __guard__ = __v__.lock().unwrap();
+            let mut __guard__ = __v__.write().unwrap();
             $(
                 __guard__.push($elem);
             )*
@@ -19,9 +19,9 @@ macro_rules! atomic_vec {
     }};
 
     ($elem:expr ; $len:expr) => {{
-        let __v__ = $crate::AtomicVec::with_capacity($len);
+        let __v__ = $crate::GrowLock::with_capacity($len);
         {
-            let mut __guard__ = __v__.lock().unwrap();
+            let mut __guard__ = __v__.write().unwrap();
             for _ in 0 .. $len {
                 __guard__.push(::std::clone::Clone::clone(&$elem));
             }
@@ -29,9 +29,9 @@ macro_rules! atomic_vec {
         __v__
     }};
     ($capacity:expr, [$elem:expr ; $len:expr]) => {{
-        let __v__ = $crate::AtomicVec::with_capacity($capacity);
+        let __v__ = $crate::GrowLock::with_capacity($capacity);
         {
-            let mut __guard__ = __v__.lock().unwrap();
+            let mut __guard__ = __v__.write().unwrap();
             for _ in 0 .. $len {
                 __guard__.push(::std::clone::Clone::clone(&$elem));
             }
@@ -41,6 +41,6 @@ macro_rules! atomic_vec {
 
     // this is last because everything can match this
     ($($elem:expr),+$(,)?) => {{
-        $crate::AtomicVec::from(::std::vec![$($elem),*])
+        $crate::GrowLock::from(::std::vec![$($elem),*])
     }};
 }

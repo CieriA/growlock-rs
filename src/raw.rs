@@ -8,24 +8,16 @@ use {
     },
 };
 
-/// Read-only data of the [`AtomicVec`](crate::AtomicVec).
-///
-/// You can push data into this only through [`AtomicVec`](crate::AtomicVec).
-pub(crate) struct RawAtomicVec<T, A: Allocator = Global> {
-    /// Pointer to the first byte of the buffer.
-    ///
-    /// Changes to this field are `Undefined Behavior`
+/// Inner representation of [`GrowLock`](crate::GrowLock).
+pub(crate) struct RawGrowLock<T, A: Allocator = Global> {
     ptr: NonNull<T>,
-    /// Capacity of the buffer.
-    ///
-    /// Cannot exceed [`isize::MAX`]
     cap: Cap,
     alloc: A,
     _marker: PhantomData<T>,
 }
 
-impl<T, A: Allocator> RawAtomicVec<T, A> {
-    /// Constructs a new [`RawAtomicVec<T>`] in the provided allocator,
+impl<T, A: Allocator> RawGrowLock<T, A> {
+    /// Constructs a new [`RawGrowLock<T>`] in the provided allocator,
     /// returning an error if the allocation fails
     ///
     /// # Errors
@@ -62,7 +54,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
             _marker: PhantomData,
         })
     }
-    /// Constructs a new [`RawAtomicVec<T>`] in the provided allocator.
+    /// Constructs a new [`RawGrowLock<T>`] in the provided allocator.
     #[inline]
     pub(crate) fn with_capacity_in(cap: Cap, alloc: A) -> Self {
         match Self::try_with_capacity_in(cap, alloc) {
@@ -73,7 +65,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
             }
         }
     }
-    /// Constructs a new [`RawAtomicVec<T>`] directly from a
+    /// Constructs a new [`RawGrowLock<T>`] directly from a
     /// [`NonNull`] pointer, a capacity, and an allocator.
     ///
     /// # Safety
@@ -98,7 +90,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
             _marker: PhantomData,
         }
     }
-    /// Constructs a new [`RawAtomicVec<T>`] directly from a pointer,
+    /// Constructs a new [`RawGrowLock<T>`] directly from a pointer,
     /// a capacity, and an allocator.
     ///
     /// # Safety
@@ -131,7 +123,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     }
     #[inline]
     pub(crate) const fn as_ptr(&self) -> *const T {
-        self.ptr.as_ptr() as _
+        self.ptr.as_ptr().cast_const()
     }
     #[inline]
     pub(crate) const fn capacity(&self) -> usize {
@@ -170,7 +162,7 @@ impl<T, A: Allocator> RawAtomicVec<T, A> {
     }
 }
 
-impl<T, A: Allocator> Drop for RawAtomicVec<T, A> {
+impl<T, A: Allocator> Drop for RawGrowLock<T, A> {
     fn drop(&mut self) {
         if let Some((ptr, layout)) = self.memory_layout() {
             // SAFETY: we allocated this block of memory with this ptr and

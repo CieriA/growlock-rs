@@ -1,5 +1,5 @@
 use {
-    crate::{AtomicVec, error::VecFull},
+    crate::{GrowLock, error::LengthError},
     std::{
         alloc::{Allocator, Global},
         ops,
@@ -7,23 +7,42 @@ use {
     },
 };
 
-pub struct AtomicVecGuard<'a, T, A: Allocator = Global> {
-    pub(crate) _guard: MutexGuard<'a, ()>,
-    pub(crate) vec: &'a AtomicVec<T, A>,
+/// RAII structure used to release the exclusive write access of a lock when
+/// dropped.
+///
+/// This structure is created by the [`write`][write] and
+/// [`try_write`][try_write] method on [`GrowLock`]
+///
+/// [write]: GrowLock::write
+/// [try_write]: GrowLock::try_write
+pub struct GrowGuard<'lock, T, A: Allocator = Global> {
+    lock: &'lock GrowLock<T, A>,
+    _guard: MutexGuard<'lock, ()>,
 }
 
-impl<T, A: Allocator> ops::Deref for AtomicVecGuard<'_, T, A> {
+impl<T, A: Allocator> ops::Deref for GrowGuard<'_, T, A> {
     type Target = [T];
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
-impl<T, A: Allocator> AtomicVecGuard<'_, T, A> {
+impl<'lock, T, A: Allocator> GrowGuard<'lock, T, A> {
+    #[inline]
+    #[must_use]
+    pub(super) const fn new(
+        lock: &'lock GrowLock<T, A>,
+        guard: MutexGuard<'lock, ()>,
+    ) -> Self {
+        Self {
+            lock,
+            _guard: guard,
+        }
+    }
     #[inline]
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
-        self.vec.as_slice()
+        self.lock.as_slice()
     }
     #[inline]
     #[must_use]
@@ -38,53 +57,53 @@ impl<T, A: Allocator> AtomicVecGuard<'_, T, A> {
     #[inline]
     #[must_use]
     pub const fn capacity(&self) -> usize {
-        self.vec.capacity()
+        self.lock.capacity()
     }
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
-        self.vec.len()
+        // We locked the mutex so writes cannot happen.
+        self.lock.len.load(Ordering::Relaxed)
     }
     /// # Panics
     /// Panics if `self.is_full()`.
     pub fn push(&mut self, value: T) {
-        // We locked the mutex so writes cannot happen.
-        let len = self.vec.len.load(Ordering::Relaxed);
+        let len = self.len();
         let cap = self.capacity();
 
         assert!(len < cap, "length overflow");
 
         // SAFETY: the ptr is still in the allocated block, even after add(len)
         unsafe {
-            let dst = self.vec.as_non_null_ref().add(len);
+            let dst = self.lock.as_non_null_ref().add(len);
             dst.write(value);
-            self.vec.len.store(len + 1, Ordering::Release);
+            self.lock.len.store(len + 1, Ordering::Release);
         }
     }
     /// # Errors
     /// Returns an error if `self.is_full()`.
-    pub fn try_push(&mut self, value: T) -> Result<(), VecFull> {
+    pub fn try_push(&mut self, value: T) -> Result<(), LengthError> {
         // We locked the mutex so writes cannot happen.
-        let len = self.vec.len.load(Ordering::Relaxed);
-        let cap = self.vec.capacity();
+        let len = self.lock.len.load(Ordering::Relaxed);
+        let cap = self.lock.capacity();
 
         if len >= cap {
-            return Err(VecFull);
+            return Err(LengthError);
         }
 
         // SAFETY: the ptr is still in the allocated block, even after add(len)
         unsafe {
-            let dst = self.vec.as_non_null_ref().add(len);
+            let dst = self.lock.as_non_null_ref().add(len);
             dst.write(value);
         }
-        self.vec.len.store(len + 1, Ordering::Release);
+        self.lock.len.store(len + 1, Ordering::Release);
 
         Ok(())
     }
 }
 
-impl<T, A: Allocator> Extend<T> for AtomicVecGuard<'_, T, A> {
-    /// Extends the [`AtomicVec<T>`] with the contents of an iterator.
+impl<T, A: Allocator> Extend<T> for GrowGuard<'_, T, A> {
+    /// Extends the [`GrowLock<T>`] with the contents of an iterator.
     ///
     /// # Panics
     /// This panics if the iterator has more elements than `self.capacity() -

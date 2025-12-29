@@ -3,7 +3,7 @@
 // > instantly dropped.
 
 use {
-    crate::{AtomicVec, atomic_vec, cap::Cap},
+    crate::{GrowLock, cap::Cap, grow_lock},
     std::{
         alloc::System,
         sync::{
@@ -25,40 +25,40 @@ impl Drop for AddOnDrop<'_> {
 
 // ------------------- constructors -------------------
 
-/// Tests constructors and [`AtomicVec::drop`] with different kind of types and
+/// Tests constructors and [`GrowLock::drop`] with different kind of types and
 /// capacities.
 #[test]
 fn new_empty_drop_primitive() {
-    let _ = AtomicVec::<u32>::try_with_capacity(0);
-    let _ = AtomicVec::<char>::with_capacity(1 << 20);
-    let _ = AtomicVec::<(i64, *mut char)>::with_capacity(12);
-    let _ = AtomicVec::<bool, _>::with_capacity_in(5, System);
-    let _ = AtomicVec::<[i8; 12], _>::try_with_capacity_in(23, System);
+    let _ = GrowLock::<u32>::try_with_capacity(0);
+    let _ = GrowLock::<char>::with_capacity(1 << 20);
+    let _ = GrowLock::<(i64, *mut char)>::with_capacity(12);
+    let _ = GrowLock::<bool, _>::with_capacity_in(5, System);
+    let _ = GrowLock::<[i8; 12], _>::try_with_capacity_in(23, System);
 }
 
-/// Tests constructors and [`AtomicVec::drop`] with more complicated types
+/// Tests constructors and [`GrowLock::drop`] with more complicated types
 #[test]
 fn new_empty_drop_heap() {
     use std::{collections::HashMap, rc::Rc, sync::Arc};
 
-    let _ = AtomicVec::<String>::try_with_capacity(0);
-    let _ = AtomicVec::<Vec<u16>>::with_capacity(3);
-    let _ = AtomicVec::<HashMap<u32, &'static str>>::with_capacity(1 << 30);
-    let _ = AtomicVec::<Arc<u64>>::with_capacity(46);
-    let _ = AtomicVec::<Rc<i64>>::with_capacity(46);
+    let _ = GrowLock::<String>::try_with_capacity(0);
+    let _ = GrowLock::<Vec<u16>>::with_capacity(3);
+    let _ = GrowLock::<HashMap<u32, &'static str>>::with_capacity(1 << 30);
+    let _ = GrowLock::<Arc<u64>>::with_capacity(46);
+    let _ = GrowLock::<Rc<i64>>::with_capacity(46);
 }
 
-/// Tests constructors and [`AtomicVec::drop`] with ZSTs
+/// Tests constructors and [`GrowLock::drop`] with ZSTs
 ///
 /// > NOTE: capacity is automatically set as 0 for ZSTs
 #[test]
 fn new_empty_drop_zst() {
     struct MyZST;
-    let _ = AtomicVec::<()>::with_capacity(0);
-    let _ = AtomicVec::<MyZST>::try_with_capacity(1 << 60);
+    let _ = GrowLock::<()>::with_capacity(0);
+    let _ = GrowLock::<MyZST>::try_with_capacity(1 << 60);
     let _ =
-        AtomicVec::<(), _>::try_with_capacity_in(isize::MAX as usize, System);
-    let v = AtomicVec::<MyZST, _>::with_capacity_in(usize::MAX, System);
+        GrowLock::<(), _>::try_with_capacity_in(isize::MAX as usize, System);
+    let v = GrowLock::<MyZST, _>::with_capacity_in(usize::MAX, System);
     assert_eq!(v.capacity(), usize::MAX);
     assert_eq!(v.buf.raw_cap(), Cap::ZERO);
 }
@@ -66,7 +66,7 @@ fn new_empty_drop_zst() {
 #[test]
 fn from_vec() {
     let vec = vec![1u32, 2, 3, 4, 5];
-    let atomic_vec = AtomicVec::from(vec);
+    let atomic_vec = GrowLock::from(vec);
     assert_eq!(&atomic_vec[..], &[1, 2, 3, 4, 5]);
 }
 
@@ -74,23 +74,23 @@ fn from_vec() {
 
 #[test]
 fn empty_macro() {
-    let vec: AtomicVec<String> = atomic_vec![];
+    let vec: GrowLock<String> = grow_lock![];
 
     assert_eq!(vec.as_slice(), &[] as &[String]);
     assert!(vec.is_empty());
     assert_eq!(vec.capacity(), 0);
-    let mut guard = vec.lock().unwrap();
+    let mut guard = vec.write().unwrap();
     assert!(guard.try_push("hello world".to_owned()).is_err());
 
-    assert_eq!(vec, AtomicVec::<String>::empty());
+    assert_eq!(vec, GrowLock::<String>::with_capacity(0));
 }
 #[test]
 fn array_macro() {
-    let vec: AtomicVec<char> = atomic_vec!(10, ['a', 'b', 'c']);
+    let vec: GrowLock<char> = grow_lock!(10, ['a', 'b', 'c']);
 
     assert_eq!(&vec, &['a', 'b', 'c']);
 
-    let mut guard = vec.lock().unwrap();
+    let mut guard = vec.write().unwrap();
     for _ in 0..7 {
         guard.push('_');
     }
@@ -98,11 +98,11 @@ fn array_macro() {
 }
 #[test]
 fn repeat_macro() {
-    let vec: AtomicVec<String> = atomic_vec!(15, ["hello".to_owned(); 4]);
+    let vec: GrowLock<String> = grow_lock!(15, ["hello".to_owned(); 4]);
     for str in &vec[..4] {
         assert_eq!(str, "hello");
     }
-    let mut guard = vec.lock().unwrap();
+    let mut guard = vec.write().unwrap();
     for _ in 0..11 {
         guard.push("world".to_owned());
     }
@@ -111,14 +111,14 @@ fn repeat_macro() {
 
 #[test]
 fn array_full_macro() {
-    let vec: AtomicVec<char> = atomic_vec!['a', 'b', 'c'];
+    let vec: GrowLock<char> = grow_lock!['a', 'b', 'c'];
     assert_eq!(&vec, &['a', 'b', 'c']);
     assert!(vec.is_full());
 }
 
 #[test]
 fn repeat_full_macro() {
-    let vec: AtomicVec<String> = atomic_vec!["hello".to_owned(); 4];
+    let vec: GrowLock<String> = grow_lock!["hello".to_owned(); 4];
     for str in &vec[..4] {
         assert_eq!(str, "hello");
     }
@@ -132,15 +132,15 @@ fn alignment() {
     #[allow(dead_code, reason = "We need a field to make `Aligned` non-ZST")]
     struct Aligned(u64);
 
-    let vec = AtomicVec::with_capacity(10);
-    let mut guard = vec.lock().unwrap();
+    let vec = GrowLock::with_capacity(10);
+    let mut guard = vec.write().unwrap();
     for i in 0..10 {
         guard.push(Aligned(i));
     }
     let addr = vec.as_ptr().addr();
     assert_eq!(addr % 64, 0);
 
-    let vec: AtomicVec<Aligned> = atomic_vec![];
+    let vec: GrowLock<Aligned> = grow_lock![];
     let addr = vec.as_ptr().addr();
     assert_eq!(addr % 64, 0);
 }
@@ -149,16 +149,16 @@ fn alignment() {
 #[test]
 #[should_panic(expected = "length overflow")]
 fn push_overflow() {
-    let vec = AtomicVec::with_capacity(5);
-    let mut guard = vec.lock().unwrap();
+    let vec = GrowLock::with_capacity(5);
+    let mut guard = vec.write().unwrap();
     for i in 0..6 {
         guard.push(i);
     }
 }
 #[test]
 fn try_push_overflow() {
-    let vec = AtomicVec::with_capacity(5);
-    let mut guard = vec.lock().unwrap();
+    let vec = GrowLock::with_capacity(5);
+    let mut guard = vec.write().unwrap();
     for i in 0..5 {
         assert!(guard.try_push(i).is_ok());
     }
@@ -171,8 +171,8 @@ fn init_drop_on_panic() {
 
     let counter = AtomicUsize::new(0);
     let result = panic::catch_unwind(|| {
-        let vec = AtomicVec::with_capacity(10);
-        let mut guard = vec.lock().unwrap();
+        let vec = GrowLock::with_capacity(10);
+        let mut guard = vec.write().unwrap();
         for _ in 0..15 {
             guard.push(AddOnDrop(&counter));
         }
@@ -190,8 +190,8 @@ fn init_drop_on_panic() {
 fn initialized_drop() {
     let counter = AtomicUsize::new(0);
     {
-        let vec = AtomicVec::with_capacity(200);
-        let mut guard = vec.lock().unwrap();
+        let vec = GrowLock::with_capacity(200);
+        let mut guard = vec.write().unwrap();
         for _ in 0..100 {
             guard.push(AddOnDrop(&counter));
         }
@@ -210,8 +210,8 @@ fn zst_drop() {
         }
     }
     {
-        let vec = AtomicVec::with_capacity(200);
-        let mut guard = vec.lock().unwrap();
+        let vec = GrowLock::with_capacity(200);
+        let mut guard = vec.write().unwrap();
         for _ in 0..150 {
             guard.push(AddZST);
         }
@@ -227,13 +227,13 @@ fn write_contention() {
     const THREADS: usize = 10;
     const CAP: usize = 1000;
 
-    let vec = Arc::new(AtomicVec::with_capacity(CAP));
+    let vec = Arc::new(GrowLock::with_capacity(CAP));
     let mut handles = Vec::with_capacity(THREADS);
     for t in 0..THREADS {
         let v = Arc::clone(&vec);
         handles.push(thread::spawn(move || {
             for i in 0..(CAP / THREADS) {
-                let mut guard = v.lock().unwrap();
+                let mut guard = v.write().unwrap();
                 guard.push(t * (CAP / THREADS) + i);
             }
         }));
@@ -249,9 +249,9 @@ fn write_contention() {
 
 #[test]
 fn read_while_locked() {
-    let vec = AtomicVec::with_capacity(5);
+    let vec = GrowLock::with_capacity(5);
     {
-        let mut guard = vec.lock().unwrap();
+        let mut guard = vec.write().unwrap();
         guard.push("hi");
         guard.push("there");
         assert_eq!(&vec[0..2], ["hi", "there"]);
@@ -262,14 +262,14 @@ fn read_while_locked() {
 
 #[test]
 fn slow_write() {
-    let vec = Arc::new(AtomicVec::with_capacity(10));
+    let vec = Arc::new(GrowLock::with_capacity(10));
     {
-        let mut guard = vec.lock().unwrap();
+        let mut guard = vec.write().unwrap();
         guard.extend(["hi", "hello", "world"]);
     }
     let vec_clone = Arc::clone(&vec);
     let handle = thread::spawn(move || {
-        let mut guard = vec_clone.lock().unwrap();
+        let mut guard = vec_clone.write().unwrap();
         guard.push("foo");
         thread::sleep(Duration::from_millis(300));
         guard.push("bar");
@@ -282,7 +282,7 @@ fn slow_write() {
     assert!(vec.len() >= 3);
     // while `handle` is writing, we still can read initialized elements.
     assert_eq!(&vec[..3], &["hi", "hello", "world"]);
-    // here, 4th element could (and probably is) be already initialized
+    // here, 4th element could be (and probably is) already initialized
     if let Some(&fourth) = vec.get(3) {
         dbg!(fourth);
         assert_eq!(fourth, "foo");

@@ -1,10 +1,8 @@
-//! A fixed-capacity [`Vec`] which allows concurrences reads and
-//! exclusive writes.
-//!
-//! [`AtomicVec`] is designed for situations where reads need to
-//! be extremely fast and cannot be blocked by writes. The
-//! capacity is fixed, defined on creation, and cannot be
-//! greater than [`isize::MAX`].
+#![doc = include_str!("../docs/lib-docs.md")]
+//! # Examples
+//! ```
+#![doc = include_str!("../examples/basic_usage.rs")]
+//! ```
 #![feature(allocator_api, sized_type_properties)]
 
 mod cap;
@@ -17,8 +15,7 @@ mod tests;
 
 use {
     crate::{
-        cap::Cap, error::TryReserveError, guard::AtomicVecGuard,
-        raw::RawAtomicVec,
+        cap::Cap, error::TryReserveError, guard::GrowGuard, raw::RawGrowLock,
     },
     std::{
         alloc::{Allocator, Global},
@@ -30,26 +27,30 @@ use {
         ptr::{self, NonNull},
         slice::{self, SliceIndex},
         sync::{
-            Mutex,
+            LockResult, Mutex, PoisonError, TryLockError, TryLockResult,
             atomic::{AtomicUsize, Ordering},
         },
     },
 };
 
-/// A fixed-capacity [`Vec`] which allows concurrent reads and
-/// exclusive writes.
-pub struct AtomicVec<T, A: Allocator = Global> {
-    buf: RawAtomicVec<T, A>,
+#[doc = include_str!("../docs/growlock.md")]
+/// # Examples
+/// ```
+#[doc = include_str!("../examples/basic_usage.rs")]
+/// ```
+pub struct GrowLock<T, A: Allocator = Global> {
+    buf: RawGrowLock<T, A>,
     len: AtomicUsize,
     mutex: Mutex<()>,
 }
 
 /// # Safety:
-/// If both `T` and `A` are [`Send`], it is safe to transfer an [`AtomicVec<T,
-/// A>`] between threads as we have exclusive ownership of the buffer.
+/// If both `T` and `A` are [`Send`], it is safe to transfer an
+/// [`GrowLock<T, A>`] between threads as we have exclusive ownership of the
+/// buffer.
 ///
 /// No thread can access the data while it's being moved.
-unsafe impl<T, A> Send for AtomicVec<T, A>
+unsafe impl<T, A> Send for GrowLock<T, A>
 where
     T: Send,
     A: Send + Allocator,
@@ -61,15 +62,14 @@ where
 ///
 /// All writes to the buffer are handled along the [`mutex`](Mutex), and so
 /// this collection is [`Sync`]
-unsafe impl<T, A> Sync for AtomicVec<T, A>
+unsafe impl<T, A> Sync for GrowLock<T, A>
 where
     T: Sync + Send,
     A: Sync + Allocator,
 {
 }
 
-/// Getters for [`AtomicVec<T>`]
-impl<T, A: Allocator> AtomicVec<T, A> {
+impl<T, A: Allocator> GrowLock<T, A> {
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -131,10 +131,8 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         //   neither does `self.len() * size_of::<T>()`
         unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
-}
 
-impl<T, A: Allocator> AtomicVec<T, A> {
-    /// Constructs a new [`AtomicVec<T>`] in the provided allocator,
+    /// Constructs a new [`GrowLock<T>`] in the provided allocator,
     /// returning an error if the allocation fails
     ///
     /// # Errors
@@ -145,19 +143,19 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     /// # Examples
     /// ```
     /// #![feature(allocator_api)]
-    /// use atomicvec::AtomicVec;
+    /// use growlock::GrowLock;
     /// use std::alloc::System;
     ///
-    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::try_with_capacity_in(10, System).unwrap();
+    /// let my_atomic_vec: GrowLock<u32, _> = GrowLock::try_with_capacity_in(10, System).unwrap();
     /// ```
     pub fn try_with_capacity_in(
         capacity: usize,
         alloc: A,
     ) -> Result<Self, TryReserveError> {
-        let Some(cap) = Cap::try_new::<T>(capacity) else {
+        let Some(cap) = Cap::new::<T>(capacity) else {
             return Err(TryReserveError::CapacityOverflow);
         };
-        let buf = RawAtomicVec::try_with_capacity_in(cap, alloc)?;
+        let buf = RawGrowLock::try_with_capacity_in(cap, alloc)?;
 
         Ok(Self {
             buf,
@@ -166,23 +164,23 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         })
     }
 
-    /// Constructs a new [`AtomicVec<T>`] in the provided allocator.
+    /// Constructs a new [`GrowLock<T>`] in the provided allocator.
     ///
     /// # Examples
     /// ```
     /// #![feature(allocator_api)]
-    /// use atomicvec::AtomicVec;
+    /// use growlock::GrowLock;
     /// use std::alloc::System;
     ///
-    /// let my_atomic_vec: AtomicVec<u32, _> = AtomicVec::with_capacity_in(10, System);
+    /// let my_atomic_vec: GrowLock<u32, _> = GrowLock::with_capacity_in(10, System);
     /// ```
     #[inline]
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
-        let cap = Cap::try_new::<T>(capacity)
+        let cap = Cap::new::<T>(capacity)
             .unwrap_or_else(|| panic!("{}", TryReserveError::CapacityOverflow));
-        let buf = RawAtomicVec::with_capacity_in(cap, alloc);
+        let buf = RawGrowLock::with_capacity_in(cap, alloc);
 
         Self {
             buf,
@@ -190,7 +188,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
             mutex: Mutex::new(()),
         }
     }
-    /// Constructs a new [`AtomicVec<T>`] directly from a [`NonNull`] pointer,
+    /// Constructs a new [`GrowLock<T>`] directly from a [`NonNull`] pointer,
     /// a capacity, and an allocator.
     ///
     /// # Safety
@@ -215,7 +213,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         Self {
             // SAFETY: the safety contract must be upheld by the caller
             buf: unsafe {
-                RawAtomicVec::from_nonnull_in(
+                RawGrowLock::from_nonnull_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
                     alloc,
@@ -225,7 +223,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
             mutex: Mutex::new(()),
         }
     }
-    /// Constructs a new [`AtomicVec<T>`] directly from a pointer,
+    /// Constructs a new [`GrowLock<T>`] directly from a pointer,
     /// a capacity, and an allocator.
     ///
     /// # Safety
@@ -249,7 +247,7 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
-                RawAtomicVec::from_raw_in(
+                RawGrowLock::from_raw_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
                     alloc,
@@ -260,22 +258,36 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         }
     }
 
-    // TODO: create an error for this (now it is an option)
     #[inline]
-    pub fn lock(&self) -> Option<AtomicVecGuard<'_, T, A>> {
-        let guard = self.mutex.lock().ok()?;
-
-        Some(AtomicVecGuard {
-            _guard: guard,
-            vec: self,
-        })
+    pub fn write(&self) -> LockResult<GrowGuard<'_, T, A>> {
+        match self.mutex.lock() {
+            Ok(guard) => Ok(GrowGuard::new(self, guard)),
+            Err(e) => {
+                let guard = e.into_inner();
+                Err(PoisonError::new(GrowGuard::new(self, guard)))
+            }
+        }
     }
-    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    #[inline]
+    pub fn try_write(&self) -> TryLockResult<GrowGuard<'_, T, A>> {
+        match self.mutex.try_lock() {
+            Ok(guard) => Ok(GrowGuard::new(self, guard)),
+            Err(TryLockError::Poisoned(e)) => {
+                let guard = e.into_inner();
+                Err(TryLockError::Poisoned(PoisonError::new(GrowGuard::new(
+                    self, guard,
+                ))))
+            }
+
+            Err(TryLockError::WouldBlock) => Err(TryLockError::WouldBlock),
+        }
+    }
+    /// Decomposes a [`GrowLock<T>`] into its raw components:
     /// ([`NonNull`] pointer, length, capacity, allocator).
     ///
     /// After calling this function, the caller is responsible for cleaning up
-    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
-    /// [`from_parts_in`](AtomicVec::from_parts_in).
+    /// the [`GrowLock<T>`]. Most often, you can do this by calling
+    /// [`from_parts_in`](GrowLock::from_parts_in).
     pub fn into_parts_with_alloc(self) -> (NonNull<T>, usize, usize, A) {
         let mut this = ManuallyDrop::new(self);
         let ptr = this.as_non_null();
@@ -286,12 +298,12 @@ impl<T, A: Allocator> AtomicVec<T, A> {
         let alloc = unsafe { ptr::read(this.allocator()) };
         (ptr, len, cap, alloc)
     }
-    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// Decomposes a [`GrowLock<T>`] into its raw components:
     /// (pointer, length, capacity, allocator).
     ///
     /// After calling this function, the caller is responsible for cleaning up
-    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
-    /// [`from_raw_parts_in`](AtomicVec::from_raw_parts_in).
+    /// the [`GrowLock<T>`]. Most often, you can do this by calling
+    /// [`from_raw_parts_in`](GrowLock::from_raw_parts_in).
     #[inline]
     pub fn into_raw_parts_with_alloc(self) -> (*mut T, usize, usize, A) {
         let (ptr, len, cap, alloc) = self.into_parts_with_alloc();
@@ -300,8 +312,8 @@ impl<T, A: Allocator> AtomicVec<T, A> {
     }
 }
 
-impl<T> AtomicVec<T> {
-    /// Constructs a new [`AtomicVec<T>`],
+impl<T> GrowLock<T> {
+    /// Constructs a new [`GrowLock<T>`],
     /// returning an error if the allocation fails
     ///
     /// # Errors
@@ -311,35 +323,30 @@ impl<T> AtomicVec<T> {
     ///
     /// # Examples
     /// ```
-    /// use atomicvec::AtomicVec;
+    /// use growlock::GrowLock;
     ///
-    /// let my_atomic_vec: AtomicVec<()> = AtomicVec::try_with_capacity(10).unwrap();
+    /// let my_atomic_vec: GrowLock<()> = GrowLock::try_with_capacity(10).unwrap();
     /// ```
     #[inline]
     pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
         Self::try_with_capacity_in(capacity, Global)
     }
 
-    /// Constructs a new [`AtomicVec<T>`].
+    /// Constructs a new [`GrowLock<T>`].
     ///
     /// # Examples
     /// ```
-    /// use atomicvec::AtomicVec;
+    /// use growlock::GrowLock;
     ///
-    /// let my_atomic_vec: AtomicVec<String> = AtomicVec::with_capacity(10);
+    /// let my_atomic_vec: GrowLock<String> = GrowLock::with_capacity(10);
     /// ```
     #[inline]
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity_in(capacity, Global)
     }
-    #[inline]
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::with_capacity(0)
-    }
 
-    /// Constructs a new [`AtomicVec<T>`] directly from a [`NonNull`] pointer,
+    /// Constructs a new [`GrowLock<T>`] directly from a [`NonNull`] pointer,
     /// and a capacity.
     ///
     /// # Safety
@@ -362,7 +369,7 @@ impl<T> AtomicVec<T> {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
-                RawAtomicVec::from_nonnull_in(
+                RawGrowLock::from_nonnull_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
                     Global,
@@ -372,7 +379,7 @@ impl<T> AtomicVec<T> {
             mutex: Mutex::new(()),
         }
     }
-    /// Constructs a new [`AtomicVec<T>`] directly from a pointer, and
+    /// Constructs a new [`GrowLock<T>`] directly from a pointer, and
     /// a capacity.
     ///
     /// # Safety
@@ -395,7 +402,7 @@ impl<T> AtomicVec<T> {
         Self {
             // SAFETY: the  safety contract must be upheld by the caller
             buf: unsafe {
-                RawAtomicVec::from_raw_in(
+                RawGrowLock::from_raw_in(
                     ptr,
                     Cap::new_unchecked::<T>(capacity),
                     Global,
@@ -405,30 +412,30 @@ impl<T> AtomicVec<T> {
             mutex: Mutex::new(()),
         }
     }
-    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// Decomposes a [`GrowLock<T>`] into its raw components:
     /// ([`NonNull`] pointer, length, capacity).
     ///
     /// After calling this function, the caller is responsible for cleaning up
-    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
-    /// [`from_parts`](AtomicVec::from_parts).
+    /// the [`GrowLock<T>`]. Most often, you can do this by calling
+    /// [`from_parts`](GrowLock::from_parts).
     #[inline]
     pub fn into_parts(self) -> (NonNull<T>, usize, usize) {
         let mut this = ManuallyDrop::new(self);
         (this.as_non_null(), this.len(), this.capacity())
     }
-    /// Decomposes a [`AtomicVec<T>`] into its raw components:
+    /// Decomposes a [`GrowLock<T>`] into its raw components:
     /// (pointer, length, capacity).
     ///
     /// After calling this function, the caller is responsible for cleaning up
-    /// the [`AtomicVec<T>`]. Most often, you can do this by calling
-    /// [`from_raw_parts`](AtomicVec::from_raw_parts).
+    /// the [`GrowLock<T>`]. Most often, you can do this by calling
+    /// [`from_raw_parts`](GrowLock::from_raw_parts).
     #[inline]
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
         let mut this = ManuallyDrop::new(self);
         (this.as_mut_ptr(), this.len(), this.capacity())
     }
 }
-impl<T, A: Allocator> Drop for AtomicVec<T, A> {
+impl<T, A: Allocator> Drop for GrowLock<T, A> {
     fn drop(&mut self) {
         // if `T::IS_ZST` then `capacity()` returns `usize::MAX`
         if self.capacity() == 0 {
@@ -445,27 +452,27 @@ impl<T, A: Allocator> Drop for AtomicVec<T, A> {
     }
 }
 
-impl<T, A: Allocator> ops::Deref for AtomicVec<T, A> {
+impl<T, A: Allocator> ops::Deref for GrowLock<T, A> {
     type Target = [T];
     #[inline]
     fn deref(&self) -> &[T] {
         self.as_slice()
     }
 }
-impl<T, A: Allocator> Borrow<[T]> for AtomicVec<T, A> {
+impl<T, A: Allocator> Borrow<[T]> for GrowLock<T, A> {
     #[inline]
     fn borrow(&self) -> &[T] {
         self.as_slice()
     }
 }
-impl<T, A: Allocator> AsRef<[T]> for AtomicVec<T, A> {
+impl<T, A: Allocator> AsRef<[T]> for GrowLock<T, A> {
     #[inline]
     fn as_ref(&self) -> &[T] {
         self.as_slice()
     }
 }
 
-impl<T, I, A> ops::Index<I> for AtomicVec<T, A>
+impl<T, I, A> ops::Index<I> for GrowLock<T, A>
 where
     I: SliceIndex<[T]>,
     A: Allocator,
@@ -476,7 +483,7 @@ where
         ops::Index::index(&**self, index)
     }
 }
-impl<T, A: Allocator + Default> Default for AtomicVec<T, A> {
+impl<T, A: Allocator + Default> Default for GrowLock<T, A> {
     #[inline]
     fn default() -> Self {
         Self::with_capacity_in(0, A::default())
@@ -485,7 +492,7 @@ impl<T, A: Allocator + Default> Default for AtomicVec<T, A> {
 
 // ------------------------------- fmt impl -------------------------------
 
-impl<T: fmt::Debug, A: Allocator> fmt::Debug for AtomicVec<T, A> {
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for GrowLock<T, A> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
@@ -494,7 +501,7 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for AtomicVec<T, A> {
 
 // ----------------------------- From impl -----------------------------
 
-impl<T, A: Allocator> From<Vec<T, A>> for AtomicVec<T, A> {
+impl<T, A: Allocator> From<Vec<T, A>> for GrowLock<T, A> {
     #[inline]
     fn from(value: Vec<T, A>) -> Self {
         let (ptr, len, cap, alloc) = value.into_parts_with_alloc();
@@ -503,9 +510,9 @@ impl<T, A: Allocator> From<Vec<T, A>> for AtomicVec<T, A> {
         unsafe { Self::from_parts_in(ptr, len, cap, alloc) }
     }
 }
-impl<T, A: Allocator> From<AtomicVec<T, A>> for Vec<T, A> {
+impl<T, A: Allocator> From<GrowLock<T, A>> for Vec<T, A> {
     #[inline]
-    fn from(value: AtomicVec<T, A>) -> Self {
+    fn from(value: GrowLock<T, A>) -> Self {
         let (ptr, len, cap, alloc) = value.into_parts_with_alloc();
         // SAFETY: the `Vec` is constructed from parts of the given `AtomicVec`
         // so this is safe.
@@ -515,18 +522,18 @@ impl<T, A: Allocator> From<AtomicVec<T, A>> for Vec<T, A> {
 
 // ----------------------------- PartialEq impl -----------------------------
 
-impl<T, U, A, A2> PartialEq<AtomicVec<U, A2>> for AtomicVec<T, A>
+impl<T, U, A, A2> PartialEq<GrowLock<U, A2>> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
     A2: Allocator,
 {
     #[inline]
-    fn eq(&self, rhs: &AtomicVec<U, A2>) -> bool {
+    fn eq(&self, rhs: &GrowLock<U, A2>) -> bool {
         PartialEq::eq(&**self, &**rhs)
     }
 }
-impl<T, U, A> PartialEq<[U]> for AtomicVec<T, A>
+impl<T, U, A> PartialEq<[U]> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -536,16 +543,16 @@ where
         PartialEq::eq(&**self, rhs)
     }
 }
-impl<T, U, A> PartialEq<AtomicVec<U, A>> for [T]
+impl<T, U, A> PartialEq<GrowLock<U, A>> for [T]
 where
     T: PartialEq<U>,
     A: Allocator,
 {
-    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+    fn eq(&self, rhs: &GrowLock<U, A>) -> bool {
         PartialEq::eq(self, &**rhs)
     }
 }
-impl<T, U, A> PartialEq<&[U]> for AtomicVec<T, A>
+impl<T, U, A> PartialEq<&[U]> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -555,16 +562,16 @@ where
         PartialEq::eq(&**self, *rhs)
     }
 }
-impl<T, U, A> PartialEq<AtomicVec<U, A>> for &[T]
+impl<T, U, A> PartialEq<GrowLock<U, A>> for &[T]
 where
     T: PartialEq<U>,
     A: Allocator,
 {
-    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+    fn eq(&self, rhs: &GrowLock<U, A>) -> bool {
         PartialEq::eq(*self, &**rhs)
     }
 }
-impl<T, U, A> PartialEq<&mut [U]> for AtomicVec<T, A>
+impl<T, U, A> PartialEq<&mut [U]> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -574,16 +581,16 @@ where
         PartialEq::eq(&**self, *rhs)
     }
 }
-impl<T, U, A> PartialEq<AtomicVec<U, A>> for &mut [T]
+impl<T, U, A> PartialEq<GrowLock<U, A>> for &mut [T]
 where
     T: PartialEq<U>,
     A: Allocator,
 {
-    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+    fn eq(&self, rhs: &GrowLock<U, A>) -> bool {
         PartialEq::eq(*self, &**rhs)
     }
 }
-impl<T, U, A, const N: usize> PartialEq<[U; N]> for AtomicVec<T, A>
+impl<T, U, A, const N: usize> PartialEq<[U; N]> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -593,16 +600,16 @@ where
         PartialEq::eq(&**self, rhs)
     }
 }
-impl<T, U, A, const N: usize> PartialEq<AtomicVec<U, A>> for [T; N]
+impl<T, U, A, const N: usize> PartialEq<GrowLock<U, A>> for [T; N]
 where
     T: PartialEq<U>,
     A: Allocator,
 {
-    fn eq(&self, rhs: &AtomicVec<U, A>) -> bool {
+    fn eq(&self, rhs: &GrowLock<U, A>) -> bool {
         PartialEq::eq(self, &**rhs)
     }
 }
-impl<T, U, A, A2> PartialEq<Vec<U, A2>> for AtomicVec<T, A>
+impl<T, U, A, A2> PartialEq<Vec<U, A2>> for GrowLock<T, A>
 where
     T: PartialEq<U>,
     A: Allocator,
@@ -615,11 +622,11 @@ where
 
 // ----------------------------- Eq and Hash impl -----------------------------
 
-impl<T: Eq, A: Allocator> Eq for AtomicVec<T, A> {}
-/// [`AtomicVec`] implements [`Borrow<[T]>`], so we need to `hash` the
+impl<T: Eq, A: Allocator> Eq for GrowLock<T, A> {}
+/// [`GrowLock`] implements [`Borrow<[T]>`], so we need to `hash` the
 /// same way as the slice does.
-impl<T: Hash, A: Allocator> Hash for AtomicVec<T, A> {
-    /// [`AtomicVec`] implements [`Borrow<[T]>`], so we need to `hash` the
+impl<T: Hash, A: Allocator> Hash for GrowLock<T, A> {
+    /// [`GrowLock`] implements [`Borrow<[T]>`], so we need to `hash` the
     /// same way as the slice does.
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {

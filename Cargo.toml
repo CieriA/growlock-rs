@@ -1,12 +1,12 @@
 [package]
-name = "atomicvec"
+name = "growlock"
 version = "0.1.0"
 rust-version = "1.94.0"
 edition = "2024"
 authors = ["CieriA"]
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/CieriA/atomicvec-rs"
+repository = "https://github.com/CieriA/growlock-rs"
 
 [dependencies]
 thiserror = "2.0.17"
