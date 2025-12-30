@@ -1,6 +1,6 @@
 # GrowLock
 
-This library provides the `GrowLock<T>`type: a contiguous array type that
+This library provides the `GrowLock<T>` type: a contiguous array type that
 can have simultaneously any number of readers **and** one writer.
 
 This is possible because after an element is pushed onto the `GrowLock`,
