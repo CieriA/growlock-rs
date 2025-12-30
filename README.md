@@ -10,7 +10,7 @@ the `GrowLock` is by pushing an element at the end of it.
 If you want to modify elements of the array and/or have a dynamical capacity,
 you should use `RwLock<Vec<T>>` instead.
 
-# Example
+# Examples
 ```rust
 use growlock::grow_lock;
 
