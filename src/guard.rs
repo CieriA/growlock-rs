@@ -1,9 +1,13 @@
+#[cfg(not(loom))]
+use std::sync::{MutexGuard, atomic::Ordering};
+
+#[cfg(loom)]
+use loom::sync::{MutexGuard, atomic::Ordering};
 use {
     crate::{GrowLock, error::LengthError},
     std::{
         alloc::{Allocator, Global},
         ops,
-        sync::{MutexGuard, atomic::Ordering},
     },
 };
 
@@ -108,9 +112,9 @@ impl<T, A: Allocator> Extend<T> for GrowGuard<'_, T, A> {
     /// Extends the [`GrowLock<T>`] with the contents of an iterator.
     ///
     /// # Panics
-    /// This panics if the iterator has more elements than `self.capacity()
-    /// - self.len()` (i.e. pushing all the elements would overflow
-    /// `self.capacity()`.
+    /// This panics if the iterator has more elements than
+    /// `self.capacity() - self.len()` (i.e. pushing all the
+    /// elements would overflow `self.capacity()`.
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         let iter = iter.into_iter();
         for elem in iter {

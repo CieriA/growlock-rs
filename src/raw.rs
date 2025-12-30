@@ -147,7 +147,7 @@ impl<T, A: Allocator> RawGrowLock<T, A> {
         }
     }
     #[inline]
-    #[cfg(test)]
+    #[cfg(all(test, not(loom)))]
     pub(crate) const fn raw_cap(&self) -> Cap {
         self.cap
     }

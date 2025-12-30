@@ -25,10 +25,10 @@ impl Drop for AddOnDrop<'_> {
 
 // ------------------- constructors -------------------
 
-/// Tests constructors and [`GrowLock::drop`] with different kind of types
-/// and capacities.
+/// Drop with different capacities, constructors and types that implements
+/// copy
 #[test]
-fn new_empty_drop_primitive() {
+fn new_empty_copy() {
     let _ = GrowLock::<u32>::try_with_capacity(0);
     let _ = GrowLock::<char>::with_capacity(1 << 20);
     let _ = GrowLock::<(i64, *mut char)>::with_capacity(12);
@@ -36,7 +36,7 @@ fn new_empty_drop_primitive() {
     let _ = GrowLock::<[i8; 12], _>::try_with_capacity_in(23, System);
 }
 
-/// Tests constructors and [`GrowLock::drop`] with more complicated types
+/// Drop with different capacities, constructors and types that need drop
 #[test]
 fn new_empty_drop_heap() {
     use std::{collections::HashMap, rc::Rc, sync::Arc};
@@ -48,9 +48,7 @@ fn new_empty_drop_heap() {
     let _ = GrowLock::<Rc<i64>>::with_capacity(46);
 }
 
-/// Tests constructors and [`GrowLock::drop`] with ZSTs
-///
-/// > NOTE: capacity is automatically set as 0 for ZSTs
+/// Drop with different capacities, constructors and ZST types
 #[test]
 fn new_empty_drop_zst() {
     struct MyZST;
@@ -65,6 +63,7 @@ fn new_empty_drop_zst() {
     assert_eq!(v.buf.raw_cap(), Cap::ZERO);
 }
 
+/// Tests if constructing a [`GrowLock`] from a [`Vec`] works
 #[test]
 fn from_vec() {
     let vec = vec![1u32, 2, 3, 4, 5];
@@ -128,6 +127,8 @@ fn repeat_full_macro() {
 }
 
 // ------------------- representation -------------------
+/// Tests if [`GrowLock`] is correctly aligned, also with dangling pointers
+/// and ZSTs
 #[test]
 fn alignment() {
     #[repr(align(64))]
@@ -136,6 +137,8 @@ fn alignment() {
         reason = "We need a field to make `Aligned` non-ZST"
     )]
     struct Aligned(u64);
+    #[repr(align(128))]
+    struct AlignedZST;
 
     let lock = GrowLock::with_capacity(10);
     let mut guard = lock.write().unwrap();
@@ -148,9 +151,14 @@ fn alignment() {
     let lock: GrowLock<Aligned> = grow_lock![];
     let addr = lock.as_ptr().addr();
     assert_eq!(addr % 64, 0);
+
+    let lock: GrowLock<AlignedZST> = GrowLock::with_capacity(1);
+    let addr = lock.as_ptr().addr();
+    assert_eq!(addr % 128, 0);
 }
 
 // ------------------- push panics -------------------
+/// `push` should panic on length overflow
 #[test]
 #[should_panic(expected = "length overflow")]
 fn push_overflow() {
@@ -160,6 +168,7 @@ fn push_overflow() {
         guard.push(i);
     }
 }
+/// `try_push` should return an error on length overflow
 #[test]
 fn try_push_overflow() {
     let lock = GrowLock::with_capacity(5);
@@ -170,6 +179,7 @@ fn try_push_overflow() {
     assert!(guard.try_push(6).is_err());
 }
 
+/// Tests if elements are correctly dropped even if the thread panics
 #[test]
 fn init_drop_on_panic() {
     use std::panic;
@@ -191,6 +201,8 @@ fn init_drop_on_panic() {
 
 // ------------------- test drop -------------------
 
+/// Tests if elements are correctly dropped when the [`GrowLock`] is
+/// dropped
 #[test]
 fn initialized_drop() {
     let counter = AtomicUsize::new(0);
@@ -205,6 +217,8 @@ fn initialized_drop() {
     assert_eq!(counter.load(Ordering::Relaxed), 100);
 }
 
+/// Tests if ZST elements are correctly dropped when the [`GrowLock`] is
+/// dropped
 #[test]
 fn zst_drop() {
     static ZST_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -227,6 +241,8 @@ fn zst_drop() {
 
 // ------------------- write -------------------
 
+/// Tests that each writer waits its turn before writing
+/// (this looks at the length)
 #[test]
 fn write_contention() {
     const THREADS: usize = 10;
@@ -254,6 +270,7 @@ fn write_contention() {
 
 // ------------------- read -------------------
 
+/// tests that we can still read while writing
 #[test]
 fn read_while_locked() {
     let lock = GrowLock::with_capacity(5);
@@ -267,6 +284,7 @@ fn read_while_locked() {
     assert_eq!(lock.len(), 3);
 }
 
+/// tests that we can still read while writing, from another thread
 #[test]
 fn slow_write() {
     let lock = Arc::new(GrowLock::with_capacity(10));
@@ -305,17 +323,19 @@ fn slow_write() {
 
 // ------------------- poisoning -------------------
 
+/// Tests if the [`GrowLock`] gets correctly poisoned on panics.
 #[test]
 fn poisoning() {
     let lock = Arc::new(GrowLock::with_capacity(5));
-    let handle = thread::spawn({
+    let _ = thread::spawn({
         let lock_clone = Arc::clone(&lock);
         move || {
             let mut guard = lock_clone.write().unwrap();
             guard.push('a');
             panic!("oops!");
         }
-    });
+    })
+    .join();
 
     assert!(lock.write().is_err());
 }

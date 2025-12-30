@@ -10,9 +10,22 @@ pub mod error;
 pub mod guard;
 mod macros;
 mod raw;
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests;
+#[cfg(all(test, loom))]
+mod tests_loom;
 
+#[cfg(not(loom))]
+use std::sync::{
+    LockResult, Mutex, TryLockResult,
+    atomic::{AtomicUsize, Ordering},
+};
+
+#[cfg(loom)]
+use loom::sync::{
+    LockResult, Mutex, TryLockResult,
+    atomic::{AtomicUsize, Ordering},
+};
 use {
     crate::{
         cap::Cap, error::TryReserveError, guard::GrowGuard,
@@ -27,12 +40,12 @@ use {
         ops,
         ptr::{self, NonNull},
         slice::{self, SliceIndex},
-        sync::{
-            LockResult, Mutex, PoisonError, TryLockError, TryLockResult,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{PoisonError, TryLockError},
     },
 };
+
+// TODO: maybe there is a way to implement `pop`?
+//  -> this changes all the structure of `GrowLock`
 
 #[doc = include_str!("../docs/growlock.md")]
 /// # Examples

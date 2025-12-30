@@ -11,7 +11,11 @@ repository = "https://github.com/CieriA/growlock-rs"
 [dependencies]
 thiserror = "2.0.17"
 
+[target.'cfg(loom)'.dependencies]
+loom = "0.7.2"
+
 [lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 unsafe_op_in_unsafe_fn = "deny"
 non_snake_case = "warn"
 unreachable_pub = "warn"
