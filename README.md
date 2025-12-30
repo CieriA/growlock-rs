@@ -51,13 +51,13 @@ And then add in your `Cargo.toml`
 [dependencies]
 growlock = { path = "<PATH>", version = "0.1.0" }
 ```
-(Substituting `<PATH>` with the path where you stored this library.)
+(Substituting `<PATH>` with the path where you stored this library).
 
 [crates.io]: https://crates.io
 
 # License
 
-This project is licensed under the [MIT license](LICENSE)
+This project is licensed under the [MIT license](LICENSE).
 
 ## Contributing
 
